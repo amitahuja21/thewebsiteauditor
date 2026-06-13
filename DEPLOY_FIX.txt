@@ -1,0 +1,38 @@
+=================================================================
+RENDER DEPLOY — FIXED SETTINGS  (use these exactly)
+=================================================================
+
+The build failed because of version + Playwright issues. Fixed now.
+
+START SIMPLE (recommended first deploy — fast scan only, very reliable):
+
+  Build command:
+      pip install -r requirements-lite.txt
+
+  Start command:
+      uvicorn main:app --host 0.0.0.0 --port $PORT
+
+  This skips Playwright entirely. Your tool works fully — only the
+  optional "Deep scan" checkbox falls back to fast scan. Everything
+  else (audit, email, homepage) works 100%.
+
+-----------------------------------------------------------------
+
+LATER, IF YOU WANT DEEP SCAN TOO (needs paid tier with more memory):
+
+  Build command:
+      pip install -r requirements.txt && playwright install --with-deps chromium
+
+  Start command:
+      uvicorn main:app --host 0.0.0.0 --port $PORT
+
+-----------------------------------------------------------------
+
+FILES IN THIS ZIP:
+  main.py                 - the whole app (homepage + tool + email)
+  requirements-lite.txt   - use THIS one for first deploy
+  requirements.txt        - full version (with Playwright) for later
+  runtime.txt             - tells Render to use Python 3.11 (stable)
+  README.md               - full instructions incl. email setup
+
+=================================================================

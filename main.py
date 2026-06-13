@@ -594,6 +594,56 @@ def home():
     return FRONTEND_HTML
 
 
+@app.get("/sitemap.xml")
+def sitemap():
+    from fastapi.responses import Response
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://thewebsiteauditor.com/</loc><lastmod>2026-06-13</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>
+  <url><loc>https://thewebsiteauditor.com/#how</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://thewebsiteauditor.com/#pricing</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://thewebsiteauditor.com/#audit</loc><changefreq>weekly</changefreq><priority>0.9</priority></url>
+</urlset>"""
+    return Response(content=xml, media_type="application/xml")
+
+
+@app.get("/llms.txt")
+def llms_txt():
+    from fastapi.responses import PlainTextResponse
+    txt = """# The Website Auditor
+
+> Free 25-point website audit service for businesses worldwide. We check whether a
+> website has the tracking, lead-capture, retargeting, SEO and AI-readiness tools
+> needed to turn visitors into customers, then install whatever is missing.
+
+## About
+The Website Auditor, founded by Amit Ahuja and based in Bangalore, India, helps
+businesses worldwide discover what their website is missing and fixes it for them.
+The audit is free; setup and ongoing management are paid services.
+
+## What we check (25 points)
+- Traffic intelligence: Google Analytics 4, Google Tag Manager
+- Behaviour: Microsoft Clarity, Hotjar
+- Retargeting: Meta Pixel, Google Ads, LinkedIn Insight
+- Lead capture: WhatsApp button, live chat, enquiry forms, exit popups, click-to-call
+- Trust and security: SSL, privacy policy, testimonials
+- SEO and visibility: schema, Open Graph, meta description, sitemap, mobile, favicon
+- AI readiness: llms.txt, heading structure, canonical tags
+
+## Services
+- Free website audit (instant, 25-point report)
+- Audit + Setup: one-time installation of all missing tools
+- Full + Monthly: setup plus chatbot, automated follow-up, and monthly reports
+
+## Contact
+- Website: https://thewebsiteauditor.com
+- Email: amit.ahuja@thewebsiteauditor.com
+- Phone / WhatsApp: +91 98866 50133
+- Location: Bangalore, Karnataka, India - serving businesses worldwide
+"""
+    return PlainTextResponse(content=txt)
+
+
 FRONTEND_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -602,6 +652,7 @@ FRONTEND_HTML = r"""<!DOCTYPE html>
 <title>The Website Auditor — Free 25-Point Website Audit</title>
 <meta name="description" content="Free instant 25-point audit of any website. See what tracking, lead-capture and retargeting tools are missing — and get the report by email.">
 <link rel="canonical" href="https://thewebsiteauditor.com/">
+<link rel="sitemap" type="application/xml" href="/sitemap.xml">
 <meta property="og:title" content="The Website Auditor — Free Website Audit">
 <meta property="og:description" content="Check any website in seconds. 25-point report on what's missing.">
 <meta property="og:type" content="website">

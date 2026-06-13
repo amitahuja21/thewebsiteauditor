@@ -1,0 +1,30 @@
+# The Website Auditor
+
+> Free 25-point website audit service for businesses worldwide. We check whether a
+> website has the tracking, lead-capture, retargeting, SEO and AI-readiness tools
+> needed to turn visitors into customers — then install whatever is missing.
+
+## About
+The Website Auditor, founded by Amit Ahuja and based in Bangalore, India, helps
+businesses worldwide discover what their website is missing and fixes it for them.
+The audit is free; setup and ongoing management are paid services.
+
+## What we check (25 points)
+- Traffic intelligence: Google Analytics 4, Google Tag Manager
+- Behaviour: Microsoft Clarity, Hotjar
+- Retargeting: Meta Pixel, Google Ads, LinkedIn Insight
+- Lead capture: WhatsApp button, live chat, enquiry forms, exit popups, click-to-call
+- Trust & security: SSL, privacy policy, testimonials
+- SEO & visibility: schema, Open Graph, meta description, sitemap, mobile, favicon
+- AI readiness: llms.txt, heading structure, canonical tags
+
+## Services
+- Free website audit (instant, 25-point report)
+- Audit + Setup: one-time installation of all missing tools
+- Full + Monthly: setup plus chatbot, automated follow-up, and monthly reports
+
+## Contact
+- Website: https://thewebsiteauditor.com
+- Email: amit.ahuja@thewebsiteauditor.com
+- Phone / WhatsApp: +91 98866 50133
+- Location: Bangalore, Karnataka, India — serving businesses worldwide
