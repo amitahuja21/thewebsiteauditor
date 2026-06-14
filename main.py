@@ -457,6 +457,14 @@ def send_email(to_email: str, subject: str, html_body: str) -> tuple[bool, str]:
 
 @app.post("/api/audit")
 def audit(req: AuditRequest):
+    # Name and email are compulsory — every audit must capture a lead.
+    _name = (req.name or "").strip()
+    _email = (req.email or "").strip()
+    if not _name or not _email or "@" not in _email or "." not in _email.split("@")[-1]:
+        return JSONResponse(status_code=400, content={
+            "ok": False,
+            "error": "Please enter your name and a valid email to run the audit.",
+        })
     url = normalize_url(req.url)
     parsed = urlparse(url)
     domain = parsed.netloc
@@ -678,19 +686,19 @@ FRONTEND_HTML = r"""<!DOCTYPE html>
   .nav-links{display:flex;align-items:center;gap:26px;font-weight:500;color:var(--navy);}
   .nav-links a:hover{color:var(--blue);}
   .hero{background:linear-gradient(135deg,var(--navy) 0%,var(--navy2) 55%,var(--blue) 135%);color:#fff;padding:64px 0 80px;position:relative;overflow:hidden;}
-  .hero .wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:46px;align-items:center;position:relative;z-index:2;}
+  .hero .wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:46px;align-items:start;position:relative;z-index:2;}
   .hero h1{font-size:44px;font-weight:800;line-height:1.12;margin:16px 0 14px;}
   .hero h1 .hl{color:var(--lime);}
   .hero p.sub{font-size:17px;color:#cdd9f0;max-width:520px;}
   .ghost{position:absolute;right:-90px;top:30px;opacity:.06;z-index:1;}
   .auditcard{background:#fff;border-radius:20px;padding:22px;box-shadow:0 30px 60px rgba(2,8,30,.35);color:var(--ink);}
   .auditcard label.l{font-size:13px;font-weight:600;color:var(--grey);display:block;margin-bottom:7px;}
-  .row1{display:flex;gap:9px;}
-  .auditcard input[type=text],.auditcard input[type=email]{flex:1;min-width:0;border:1.5px solid #DDE3EF;border-radius:10px;padding:13px 15px;font-size:15px;color:var(--ink);}
+  .auditcard input{border:1.5px solid #DDE3EF;border-radius:10px;padding:13px 15px;font-size:15px;color:var(--ink);width:100%;}
   .auditcard input:focus{outline:3px solid var(--lime);border-color:var(--lime);}
   .subrow{display:flex;gap:9px;margin-top:9px;}
-  .subrow input{flex:1;}
+  .subrow input{flex:1;min-width:0;}
   .deep{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--grey);margin-top:10px;cursor:pointer;}
+  .deep input{width:auto;}
   .hint{font-size:12px;color:#94a3b8;margin-top:9px;}
   #out{margin-top:16px;}
   .scorecard{border-radius:14px;padding:16px;background:var(--light);border:1px solid #dbe5f3;}
@@ -701,12 +709,19 @@ FRONTEND_HTML = r"""<!DOCTYPE html>
   .stat-row{display:flex;gap:7px;margin-top:12px;}
   .stat{flex:1;text-align:center;padding:9px 4px;border-radius:9px;}
   .stat .v{font-size:20px;font-weight:800;} .stat .s{font-size:10px;font-weight:600;}
+  .emailnote{margin-top:11px;padding:9px 11px;border-radius:9px;font-size:12px;font-weight:600;}
+  .cathead{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--grey);margin:15px 0 5px;}
   .chk{background:#fff;border-radius:9px;margin-top:7px;border-left:4px solid #cbd5e1;padding:10px 12px;}
   .chk.ok{border-left-color:var(--green);} .chk.unc{border-left-color:var(--yellow);} .chk.no{border-left-color:var(--red);}
-  .chk .nm{font-size:13px;font-weight:700;color:var(--navy);}
-  .chk .badge{font-size:9px;padding:2px 7px;border-radius:8px;font-weight:700;margin-left:6px;}
-  .chk .ds{font-size:11px;color:#8a97ad;margin-top:2px;}
-  .emailnote{margin-top:11px;padding:9px 11px;border-radius:9px;font-size:12px;font-weight:600;}
+  .chkhead{display:flex;align-items:center;gap:6px;cursor:pointer;}
+  .chk .nm{font-size:13px;font-weight:700;color:var(--navy);flex:1;}
+  .chk .badge{font-size:9px;padding:2px 7px;border-radius:8px;font-weight:700;}
+  .caret{font-size:11px;color:#94a3b8;transition:transform .15s;}
+  .chk.open .caret{transform:rotate(90deg);}
+  .detail{display:none;margin-top:9px;padding-top:9px;border-top:1px solid #eef2f7;font-size:12px;color:#475569;}
+  .chk.open .detail{display:block;}
+  .detail p{margin-bottom:6px;} .detail .m{font-size:11px;color:#94a3b8;}
+  .fixbtn{display:inline-block;margin-top:6px;background:var(--navy);color:#fff;font-weight:600;font-size:12px;padding:7px 14px;border-radius:999px;}
   .spin{text-align:center;padding:22px;color:var(--navy);font-weight:600;}
   .dots span{display:inline-block;width:9px;height:9px;margin:0 3px;border-radius:50%;background:var(--blue);animation:b 1.2s infinite;}
   .dots span:nth-child(2){animation-delay:.2s}.dots span:nth-child(3){animation-delay:.4s}
@@ -753,20 +768,18 @@ FRONTEND_HTML = r"""<!DOCTYPE html>
     <div>
       <span class="pill">⚡ Free 60-second website audit</span>
       <h1>Find what's quietly costing your website <span class="hl">customers.</span></h1>
-      <p class="sub">We scan any site for 25 things every business needs in 2026 — tracking, lead capture, retargeting and whether AI search engines can even find you.</p>
+      <p class="sub">We scan any site for 25 things every business needs in 2026 — tracking, lead capture, retargeting and whether AI search engines can even find you. Tap any result to see what it means and how to fix it.</p>
     </div>
     <div class="auditcard" id="audit">
       <label class="l">Enter a website to audit</label>
-      <div class="row1">
-        <input type="text" id="url" placeholder="e.g. yourbusiness.com" onkeydown="if(event.key==='Enter')run()">
-        <button class="btn btn-yellow" id="btn" onclick="run()">Scan Now</button>
-      </div>
+      <input type="text" id="url" placeholder="e.g. yourbusiness.com" onkeydown="if(event.key==='Enter')run()">
       <div class="subrow">
-        <input type="email" id="email" placeholder="Email (optional) — get the full report">
-        <input type="text" id="name" placeholder="Name">
+        <input type="text" id="name" placeholder="Your name *">
+        <input type="email" id="email" placeholder="Your email *">
       </div>
+      <button class="btn btn-yellow" id="btn" onclick="run()" style="width:100%;justify-content:center;margin-top:11px;">Scan Now — Free</button>
       <label class="deep"><input type="checkbox" id="deep"> Deep scan (slower, catches JS-loaded tools)</label>
-      <div class="hint">100% free · no signup · reads the live website code</div>
+      <div class="hint">100% free · we email your full report · reads your live website code</div>
       <div id="out"></div>
     </div>
   </div>
@@ -825,12 +838,18 @@ FRONTEND_HTML = r"""<!DOCTYPE html>
 
 <script>
 function focusUrl(){document.getElementById('audit').scrollIntoView({behavior:'smooth',block:'center'});document.getElementById('url').focus();}
+function clearErr(){['url','name','email'].forEach(function(id){document.getElementById(id).style.outline='';});}
+function showErr(id,msg){clearErr();var el=document.getElementById(id);el.focus();el.style.outline='3px solid #EF4444';document.getElementById('out').innerHTML='<div class="scorecard" style="border:1px solid #fecaca;background:#fef2f2;color:#b91c1c;font-weight:600">⚠️ '+msg+'</div>';}
 async function run(){
   var url=document.getElementById('url').value.trim();
-  if(!url){document.getElementById('url').focus();document.getElementById('url').style.outline='3px solid #FACC15';return;}
-  var deep=document.getElementById('deep').checked;
-  var email=document.getElementById('email').value.trim();
   var name=document.getElementById('name').value.trim();
+  var email=document.getElementById('email').value.trim();
+  var at=email.indexOf('@');
+  if(!url){showErr('url','Please enter a website to audit.');return;}
+  if(!name){showErr('name','Please enter your name — it is required.');return;}
+  if(!email||at<1||email.indexOf('.',at)<0){showErr('email','Please enter a valid email — we send your full report there.');return;}
+  clearErr();
+  var deep=document.getElementById('deep').checked;
   var btn=document.getElementById('btn'); btn.disabled=true;
   document.getElementById('out').innerHTML='<div class="spin">'+(deep?'🌐 Deep scan — loading in a browser…':'🔍 Reading website code…')+'<div class="dots"><span></span><span></span><span></span></div></div>';
   try{
@@ -842,10 +861,11 @@ async function run(){
     document.getElementById('out').innerHTML='<div class="scorecard" style="border:1px solid #fecaca;background:#fef2f2;color:#b91c1c;font-weight:600">⚠️ '+e.message+'</div>';
   }finally{ btn.disabled=false; }
 }
+function tog(el){ el.parentNode.classList.toggle('open'); }
 function show(d){
   var sc=d.score>=70?'#65A30D':d.score>=40?'#CA8A04':'#EF4444';
   var h='<div class="scorecard">';
-  h+='<div class="scorehead"><div><div class="meta">AUDIT COMPLETE</div><div class="dom">'+d.domain+'</div><div class="meta">'+d.platform+' · '+d.scan_mode+' scan</div></div><div class="score" style="color:'+sc+'">'+d.score+'%</div></div>';
+  h+='<div class="scorehead"><div><div class="meta">AUDIT COMPLETE</div><div class="dom">'+d.domain+'</div><div class="meta">'+d.platform+' · '+d.scan_mode+' scan · '+(d.load_ms||0)+'ms</div></div><div class="score" style="color:'+sc+'">'+d.score+'%</div></div>';
   h+='<div class="stat-row"><div class="stat" style="background:#ecfccb"><div class="v" style="color:#65A30D">'+d.found+'</div><div class="s" style="color:#65A30D">Working</div></div>';
   if(d.uncertain>0)h+='<div class="stat" style="background:#fef9c3"><div class="v" style="color:#CA8A04">'+d.uncertain+'</div><div class="s" style="color:#CA8A04">Via GTM?</div></div>';
   h+='<div class="stat" style="background:#fee2e2"><div class="v" style="color:#EF4444">'+d.missing+'</div><div class="s" style="color:#EF4444">Missing</div></div>';
@@ -853,12 +873,23 @@ function show(d){
   if(d.email_sent)h+='<div class="emailnote" style="background:#ecfccb;color:#3f6212">📧 Full report sent to your email!</div>';
   else if(d.email_msg)h+='<div class="emailnote" style="background:#fef9c3;color:#854d0e">Note: email not sent ('+d.email_msg+')</div>';
   h+='</div>';
+  h+='<div class="hint" style="margin:13px 0 2px">Tap any check below to see what it means and how to fix it.</div>';
+  var lastCat='';
   d.checks.forEach(function(c){
+    if(c.category&&c.category!==lastCat){ h+='<div class="cathead">'+c.category+'</div>'; lastCat=c.category; }
     var st=c.found?'ok':(c.uncertain?'unc':'no');
     var ic=c.found?(c.icon||'✓'):(c.uncertain?'❓':'❌');
     var bg=c.found?'background:#ecfccb;color:#3f6212':(c.uncertain?'background:#fef9c3;color:#854d0e':'background:#fee2e2;color:#b91c1c');
     var lbl=c.found?'✓ FOUND':(c.uncertain?'❓ MAYBE':'✗ MISSING');
-    h+='<div class="chk '+st+'"><span class="nm">'+ic+' '+c.name+'</span><span class="badge" style="'+bg+'">'+lbl+'</span><div class="ds">'+c.description+'</div></div>';
+    var det='<p><b>What it does:</b> '+c.description+'</p>';
+    if(c.found){ det+='<p style="color:#3f6212"><b>✓ Set up correctly</b> on this website.</p>'; }
+    else if(c.uncertain){ det+='<p>'+(c.warning||'A Google Tag Manager container is present, so this may be firing inside it. Run a deep scan to confirm.')+'</p>'; }
+    else {
+      det+='<p><b>Why it matters:</b> '+(c.missing_msg||'This is missing and worth adding to your site.')+'</p>';
+      det+='<p class="m">Impact: '+c.impact+'  ·  Typical fix: '+c.fix_time+'  ·  Cost: '+c.cost+'</p>';
+      det+='<a class="fixbtn" target="_blank" href="https://wa.me/919886650133?text='+encodeURIComponent('Hi Amit, I want to fix '+c.name+' on '+d.domain)+'">Fix this for me →</a>';
+    }
+    h+='<div class="chk '+st+'"><div class="chkhead" onclick="tog(this)"><span class="nm">'+ic+' '+c.name+'</span><span class="badge" style="'+bg+'">'+lbl+'</span><span class="caret">▸</span></div><div class="detail">'+det+'</div></div>';
   });
   document.getElementById('out').innerHTML=h;
 }
