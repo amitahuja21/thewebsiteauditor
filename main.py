@@ -9,11 +9,6 @@ import re
 import ssl
 import socket
 import time
-import os
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
 from urllib.parse import urlparse
 
 import requests
@@ -23,16 +18,6 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="Website Intelligence Auditor")
-
-# ─── Email configuration (set these as environment variables on Render) ───────
-# SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, FROM_EMAIL, OWNER_EMAIL
-# For Google Workspace use smtp.gmail.com with an App Password (not your normal password).
-SMTP_HOST   = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT   = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER   = os.environ.get("SMTP_USER", "")          # e.g. amit.ahuja@thewebsiteauditor.com
-SMTP_PASS   = os.environ.get("SMTP_PASS", "")          # an app password
-FROM_EMAIL  = os.environ.get("FROM_EMAIL", SMTP_USER)
-OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "amit.ahuja@thewebsiteauditor.com")
 
 app.add_middleware(
     CORSMiddleware,
@@ -270,8 +255,6 @@ CHECKS = [
 class AuditRequest(BaseModel):
     url: str
     deep_scan: bool = False
-    email: str = ""          # optional — if provided, email the report
-    name: str = ""           # optional — visitor's name
 
 
 def normalize_url(raw: str) -> str:
@@ -385,156 +368,8 @@ def detect_platform(html: str) -> str:
     return "Custom / Unknown"
 
 
-def build_report_html(result: dict, visitor_name: str = "") -> str:
-    """Build a plain-language HTML email report from audit results."""
-    score = result["score"]
-    sc_color = "#2E7D32" if score >= 70 else "#E8680A" if score >= 40 else "#C62828"
-    greeting = f"Hi {visitor_name}," if visitor_name else "Hello,"
-
-    missing = [c for c in result["checks"] if not c["found"] and not c.get("uncertain")]
-    found   = [c for c in result["checks"] if c["found"]]
-
-    missing_rows = ""
-    for c in missing:
-        missing_rows += f"""
-        <tr>
-          <td style="padding:10px 12px;border-bottom:1px solid #eee;font-size:14px;">
-            <b>{c['icon']} {c['name']}</b>
-            <div style="color:#777;font-size:12px;margin-top:3px;">{c.get('missing_msg') or c['description']}</div>
-          </td>
-          <td style="padding:10px 12px;border-bottom:1px solid #eee;text-align:center;font-size:11px;color:#C62828;font-weight:700;white-space:nowrap;">{c['impact']}</td>
-        </tr>"""
-
-    found_list = " · ".join(c["name"] for c in found) or "None yet"
-
-    return f"""<!DOCTYPE html><html><body style="margin:0;background:#f0f4fa;font-family:Arial,sans-serif;">
-    <div style="max-width:640px;margin:0 auto;background:#fff;">
-      <div style="background:linear-gradient(135deg,#1A4A8A,#0D2E5A);padding:28px 30px;color:#fff;">
-        <div style="font-size:11px;letter-spacing:2px;color:#8FB8F0;text-transform:uppercase;">Website Health Report</div>
-        <div style="font-size:24px;font-weight:900;margin-top:6px;">{result['domain']}</div>
-        <div style="font-size:13px;color:#C5D8F5;margin-top:4px;">Prepared by The Website Auditor</div>
-      </div>
-      <div style="padding:24px 30px;text-align:center;background:#FFF4E6;border-bottom:1px solid #f0dcc0;">
-        <div style="font-size:48px;font-weight:900;color:{sc_color};line-height:1;">{score}%</div>
-        <div style="font-size:13px;color:#666;margin-top:6px;">Health Score — {result['found']} working, {result['missing']} missing of 25 essential tools</div>
-      </div>
-      <div style="padding:24px 30px;">
-        <p style="font-size:15px;color:#333;">{greeting}</p>
-        <p style="font-size:15px;color:#333;line-height:1.6;">Here is the free health check for <b>{result['domain']}</b>. Your website is missing <b style="color:#C62828;">{result['missing']} tools</b> that help capture and follow up with visitors. The good news: most are free and quick to fix.</p>
-        <h3 style="font-size:16px;color:#1A4A8A;margin:22px 0 10px;">What's missing right now</h3>
-        <table style="width:100%;border-collapse:collapse;border:1px solid #eee;border-radius:8px;overflow:hidden;">{missing_rows}</table>
-        <h3 style="font-size:16px;color:#2E7D32;margin:22px 0 8px;">Already working ✓</h3>
-        <p style="font-size:13px;color:#555;line-height:1.6;">{found_list}</p>
-        <div style="margin-top:26px;padding:18px;background:#1A4A8A;border-radius:10px;text-align:center;">
-          <div style="color:#fff;font-size:15px;font-weight:700;margin-bottom:6px;">Want us to fix all of this for you?</div>
-          <div style="color:#B8D0F0;font-size:13px;margin-bottom:14px;">Most fixes are free. You only pay for setup time.</div>
-          <a href="https://wa.me/919886650133" style="background:#E8680A;color:#fff;text-decoration:none;padding:11px 24px;border-radius:8px;font-weight:700;font-size:14px;display:inline-block;">Chat on WhatsApp →</a>
-        </div>
-      </div>
-      <div style="padding:18px 30px;background:#0D2E5A;color:#9DBDEE;font-size:12px;text-align:center;">
-        Amit Ahuja · The Website Auditor · +91 98866 50133<br>amit.ahuja@thewebsiteauditor.com · Bangalore, Karnataka
-      </div>
-    </div></body></html>"""
-
-
-def send_email(to_email: str, subject: str, html_body: str, pdf_bytes: bytes = None, pdf_name: str = "website-audit.pdf") -> tuple[bool, str]:
-    """Send an HTML email via SMTP. Returns (success, message)."""
-    if not SMTP_USER or not SMTP_PASS:
-        return False, "Email not configured on server (SMTP_USER/SMTP_PASS missing)."
-    try:
-        msg = MIMEMultipart("mixed")
-        msg["Subject"] = subject
-        msg["From"] = FROM_EMAIL
-        msg["To"] = to_email
-        alt = MIMEMultipart("alternative")
-        alt.attach(MIMEText(html_body, "html"))
-        msg.attach(alt)
-        if pdf_bytes:
-            part = MIMEApplication(pdf_bytes, _subtype="pdf")
-            part.add_header("Content-Disposition", "attachment", filename=pdf_name)
-            msg.attach(part)
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(FROM_EMAIL, [to_email], msg.as_string())
-        return True, "sent"
-    except Exception as e:
-        return False, f"{e.__class__.__name__}: {e}"
-
-
-
-def build_report_pdf(result: dict, visitor_name: str = ""):
-    """Build a branded PDF of the full audit. Returns PDF bytes, or None on failure."""
-    try:
-        from fpdf import FPDF
-    except Exception:
-        return None
-    try:
-        from datetime import datetime
-        def s(t):
-            t = str(t if t is not None else "")
-            for k, v in {"\u20b9":"Rs ","\u2014":"-","\u2013":"-","\u2019":"'","\u2018":"'",
-                         "\u201c":'"',"\u201d":'"',"\u2022":"-","\u2192":"->","\u00b7":"-"}.items():
-                t = t.replace(k, v)
-            return t.encode("latin-1", "ignore").decode("latin-1")
-        NAVY=(10,26,64); GREEN=(101,163,13); RED=(220,38,38); AMBER=(202,138,4); GREY=(90,100,120)
-        pdf = FPDF(format="A4"); pdf.set_auto_page_break(True, margin=16); pdf.add_page()
-        W = pdf.w - 2*pdf.l_margin
-        pdf.set_fill_color(*NAVY); pdf.rect(0,0,pdf.w,30,"F")
-        pdf.set_xy(pdf.l_margin,8); pdf.set_text_color(255,255,255); pdf.set_font("Helvetica","B",18)
-        pdf.cell(0,8,s("The Website Auditor"),ln=1)
-        pdf.set_x(pdf.l_margin); pdf.set_text_color(163,230,53); pdf.set_font("Helvetica","",10)
-        pdf.cell(0,5,s("Website Health Report"),ln=1)
-        pdf.ln(12)
-        pdf.set_text_color(*NAVY); pdf.set_font("Helvetica","B",13)
-        pdf.cell(0,7,s(result.get("domain","")),ln=1)
-        pdf.set_font("Helvetica","",10); pdf.set_text_color(*GREY)
-        pdf.cell(0,5,s("Prepared for: "+(visitor_name or "You")+"    Platform: "+str(result.get("platform","-"))+"    Scan: "+str(result.get("scan_mode","-"))),ln=1)
-        pdf.cell(0,5,s("Date: "+datetime.utcnow().strftime("%d %b %Y")),ln=1)
-        pdf.ln(3)
-        score = result.get("score",0); col = GREEN if score>=70 else (AMBER if score>=40 else RED)
-        y0=pdf.get_y(); pdf.set_fill_color(238,242,247); pdf.set_draw_color(220,228,238); pdf.rect(pdf.l_margin,y0,W,22,"DF")
-        pdf.set_xy(pdf.l_margin+4,y0+3); pdf.set_text_color(*col); pdf.set_font("Helvetica","B",26); pdf.cell(34,16,s(str(score)+"%"))
-        pdf.set_xy(pdf.l_margin+42,y0+4); pdf.set_text_color(*NAVY); pdf.set_font("Helvetica","B",11); pdf.cell(0,6,s("Overall Health Score"),ln=2)
-        pdf.set_x(pdf.l_margin+42); pdf.set_font("Helvetica","",9); pdf.set_text_color(*GREY)
-        pdf.cell(0,5,s("Working: "+str(result.get("found",0))+"    Maybe via GTM: "+str(result.get("uncertain",0))+"    Missing: "+str(result.get("missing",0))+"    Critical: "+str(result.get("critical_gaps",0))))
-        pdf.ln(18)
-        last=""
-        for c in result.get("checks",[]):
-            cat=c.get("category","")
-            if cat and cat!=last:
-                pdf.ln(2); pdf.set_font("Helvetica","B",11); pdf.set_text_color(*NAVY); pdf.cell(0,7,s(cat),ln=1); last=cat
-            if c.get("found"): stcol=GREEN; lbl="FOUND"
-            elif c.get("uncertain"): stcol=AMBER; lbl="MAYBE"
-            else: stcol=RED; lbl="MISSING"
-            pdf.set_font("Helvetica","B",10); pdf.set_text_color(*stcol); pdf.cell(24,6,s("["+lbl+"]"))
-            pdf.set_text_color(*NAVY); pdf.cell(0,6,s(c.get("name","")),ln=1)
-            pdf.set_font("Helvetica","",9); pdf.set_text_color(*GREY)
-            pdf.set_x(pdf.l_margin+24); pdf.multi_cell(W-24,4.6,s(c.get("description","")))
-            if not c.get("found") and not c.get("uncertain") and c.get("missing_msg"):
-                pdf.set_x(pdf.l_margin+24); pdf.set_text_color(150,60,60); pdf.multi_cell(W-24,4.6,s("Why it matters: "+c.get("missing_msg","")))
-                pdf.set_x(pdf.l_margin+24); pdf.set_text_color(*GREY); pdf.multi_cell(W-24,4.6,s("Impact: "+str(c.get("impact","-"))+"   Fix: "+str(c.get("fix_time","-"))+"   Cost: "+str(c.get("cost","-"))))
-            pdf.ln(1.5)
-        pdf.ln(3); pdf.set_draw_color(220,228,238); pdf.line(pdf.l_margin,pdf.get_y(),pdf.w-pdf.r_margin,pdf.get_y()); pdf.ln(3)
-        pdf.set_font("Helvetica","B",10); pdf.set_text_color(*NAVY); pdf.cell(0,6,s("Want us to fix these for you?"),ln=1)
-        pdf.set_font("Helvetica","",9); pdf.set_text_color(*GREY)
-        pdf.cell(0,5,s("The Website Auditor  |  +91 98866 50133  |  amit.ahuja@thewebsiteauditor.com"),ln=1)
-        pdf.cell(0,5,s("WhatsApp: https://wa.me/919886650133"),ln=1)
-        return bytes(pdf.output())
-    except Exception:
-        return None
-
-
 @app.post("/api/audit")
 def audit(req: AuditRequest):
-    # Name and email are compulsory - every audit must capture a lead.
-    _name = (req.name or "").strip()
-    _email = (req.email or "").strip()
-    if not _name or not _email or "@" not in _email or "." not in _email.split("@")[-1]:
-        return JSONResponse(status_code=400, content={
-            "ok": False,
-            "error": "Please enter your name and a valid email to run the audit.",
-        })
     url = normalize_url(req.url)
     parsed = urlparse(url)
     domain = parsed.netloc
@@ -620,7 +455,7 @@ def audit(req: AuditRequest):
     # Score gives uncertain items half credit (they're likely present via GTM)
     score = round((found_n + uncertain_n * 0.5) / len(results) * 100)
 
-    result = {
+    return {
         "ok": True,
         "domain": domain,
         "final_url": meta["final_url"],
@@ -637,34 +472,6 @@ def audit(req: AuditRequest):
         "checks": results,
     }
 
-    # ─── Email the report if a visitor email was provided ───
-    email = (req.email or "").strip()
-    if email and "@" in email:
-        report_html = build_report_html(result, req.name)
-        pdf_bytes = build_report_pdf(result, req.name)
-        pdf_name = f"website-audit-{domain}.pdf"
-        # 1) Send report to the visitor
-        ok_visitor, msg_v = send_email(
-            email,
-            f"Your Website Health Report — {domain} ({score}%)",
-            report_html, pdf_bytes, pdf_name,
-        )
-        # 2) Send a copy/lead alert to the owner (Amit)
-        if OWNER_EMAIL:
-            lead_note = (
-                f"<p style='font-family:Arial'>New audit lead:<br>"
-                f"<b>Name:</b> {req.name or '—'}<br>"
-                f"<b>Email:</b> {email}<br>"
-                f"<b>Website audited:</b> {domain} — scored {score}%</p>"
-            )
-            send_email(OWNER_EMAIL, f"New lead: {email} audited {domain}", lead_note + report_html, pdf_bytes, pdf_name)
-
-        result["email_sent"] = ok_visitor
-        result["email_msg"] = msg_v
-        result["pdf_attached"] = bool(pdf_bytes)
-
-    return result
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FRONTEND — served at /
@@ -675,296 +482,224 @@ def home():
     return FRONTEND_HTML
 
 
-@app.get("/sitemap.xml")
-def sitemap():
-    from fastapi.responses import Response
-    xml = """<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://thewebsiteauditor.com/</loc><lastmod>2026-06-13</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>
-  <url><loc>https://thewebsiteauditor.com/#how</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
-  <url><loc>https://thewebsiteauditor.com/#pricing</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
-  <url><loc>https://thewebsiteauditor.com/#audit</loc><changefreq>weekly</changefreq><priority>0.9</priority></url>
-</urlset>"""
-    return Response(content=xml, media_type="application/xml")
-
-
-@app.get("/llms.txt")
-def llms_txt():
-    from fastapi.responses import PlainTextResponse
-    txt = """# The Website Auditor
-
-> Free 25-point website audit service for businesses worldwide. We check whether a
-> website has the tracking, lead-capture, retargeting, SEO and AI-readiness tools
-> needed to turn visitors into customers, then install whatever is missing.
-
-## About
-The Website Auditor, founded by Amit Ahuja and based in Bangalore, India, helps
-businesses worldwide discover what their website is missing and fixes it for them.
-The audit is free; setup and ongoing management are paid services.
-
-## What we check (25 points)
-- Traffic intelligence: Google Analytics 4, Google Tag Manager
-- Behaviour: Microsoft Clarity, Hotjar
-- Retargeting: Meta Pixel, Google Ads, LinkedIn Insight
-- Lead capture: WhatsApp button, live chat, enquiry forms, exit popups, click-to-call
-- Trust and security: SSL, privacy policy, testimonials
-- SEO and visibility: schema, Open Graph, meta description, sitemap, mobile, favicon
-- AI readiness: llms.txt, heading structure, canonical tags
-
-## Services
-- Free website audit (instant, 25-point report)
-- Audit + Setup: one-time installation of all missing tools
-- Full + Monthly: setup plus chatbot, automated follow-up, and monthly reports
-
-## Contact
-- Website: https://thewebsiteauditor.com
-- Email: amit.ahuja@thewebsiteauditor.com
-- Phone / WhatsApp: +91 98866 50133
-- Location: Bangalore, Karnataka, India - serving businesses worldwide
-"""
-    return PlainTextResponse(content=txt)
-
-
 FRONTEND_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>The Website Auditor — Free 60-Second Website Audit</title>
-<meta name="description" content="Free 25-point website audit. See what tracking, lead-capture, retargeting and AI-search tools your website is missing — then we fix them.">
-<link rel="canonical" href="https://thewebsiteauditor.com/">
-<link rel="sitemap" type="application/xml" href="/sitemap.xml">
-<meta property="og:title" content="The Website Auditor — Free Website Audit">
-<meta property="og:description" content="Find what your website is missing in 60 seconds. Free 25-point audit.">
-<meta property="og:type" content="website">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<title>Website Intelligence Auditor</title>
 <style>
-  :root{--navy:#0A1A40;--navy2:#14245C;--blue:#2563EB;--lime:#A3E635;--green:#65A30D;
-        --yellow:#FACC15;--light:#EAF1F8;--white:#fff;--ink:#0F172A;--grey:#5B6B85;--red:#EF4444;}
-  *{margin:0;padding:0;box-sizing:border-box;font-family:'Poppins',ui-sans-serif,system-ui,sans-serif;}
-  html{scroll-behavior:smooth;} body{color:var(--ink);background:var(--white);line-height:1.55;}
-  .wrap{max-width:1180px;margin:0 auto;padding:0 22px;}
-  a{text-decoration:none;color:inherit;}
-  .btn{display:inline-flex;align-items:center;gap:8px;border:none;cursor:pointer;font-weight:700;border-radius:999px;padding:14px 26px;font-size:16px;transition:transform .12s,box-shadow .12s;}
-  .btn:hover{transform:translateY(-2px);} .btn:disabled{opacity:.55;cursor:default;transform:none;}
-  .btn-yellow{background:var(--yellow);color:var(--navy);box-shadow:0 8px 22px rgba(250,204,21,.35);}
-  .btn-navy{background:var(--navy);color:#fff;}
-  .pill{display:inline-flex;align-items:center;gap:8px;border:1.5px solid var(--lime);color:var(--lime);font-weight:600;font-size:13px;letter-spacing:.5px;text-transform:uppercase;padding:7px 14px;border-radius:999px;}
-  nav{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.93);backdrop-filter:blur(8px);border-bottom:1px solid #e2e8f0;}
-  .nav{display:flex;align-items:center;justify-content:space-between;padding:13px 0;}
-  .logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:20px;color:var(--navy);}
-  .logo .mark{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--navy),var(--blue));display:flex;align-items:center;justify-content:center;}
-  .nav-links{display:flex;align-items:center;gap:26px;font-weight:500;color:var(--navy);}
-  .nav-links a:hover{color:var(--blue);}
-  .hero{background:linear-gradient(135deg,var(--navy) 0%,var(--navy2) 55%,var(--blue) 135%);color:#fff;padding:64px 0 80px;position:relative;overflow:hidden;}
-  .hero .wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:46px;align-items:start;position:relative;z-index:2;}
-  .hero h1{font-size:44px;font-weight:800;line-height:1.12;margin:16px 0 14px;}
-  .hero h1 .hl{color:var(--lime);}
-  .hero p.sub{font-size:17px;color:#cdd9f0;max-width:520px;}
-  .ghost{position:absolute;right:-90px;top:30px;opacity:.06;z-index:1;}
-  .auditcard{background:#fff;border-radius:20px;padding:22px;box-shadow:0 30px 60px rgba(2,8,30,.35);color:var(--ink);}
-  .auditcard label.l{font-size:13px;font-weight:600;color:var(--grey);display:block;margin-bottom:7px;}
-  .auditcard input{border:1.5px solid #DDE3EF;border-radius:10px;padding:13px 15px;font-size:15px;color:var(--ink);width:100%;}
-  .auditcard input:focus{outline:3px solid var(--lime);border-color:var(--lime);}
-  .subrow{display:flex;gap:9px;margin-top:9px;}
-  .subrow input{flex:1;min-width:0;}
-  .deep{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--grey);margin-top:10px;cursor:pointer;}
-  .deep input{width:auto;}
-  .hint{font-size:12px;color:#94a3b8;margin-top:9px;}
-  #out{margin-top:16px;}
-  .scorecard{border-radius:14px;padding:16px;background:var(--light);border:1px solid #dbe5f3;}
-  .scorehead{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
-  .scorehead .dom{font-size:16px;font-weight:800;color:var(--navy);}
-  .scorehead .meta{font-size:11px;color:var(--grey);}
-  .scorehead .score{font-size:38px;font-weight:800;line-height:1;}
-  .stat-row{display:flex;gap:7px;margin-top:12px;}
-  .stat{flex:1;text-align:center;padding:9px 4px;border-radius:9px;}
-  .stat .v{font-size:20px;font-weight:800;} .stat .s{font-size:10px;font-weight:600;}
-  .emailnote{margin-top:11px;padding:9px 11px;border-radius:9px;font-size:12px;font-weight:600;}
-  .cathead{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--grey);margin:15px 0 5px;}
-  .chk{background:#fff;border-radius:9px;margin-top:7px;border-left:4px solid #cbd5e1;padding:10px 12px;}
-  .chk.ok{border-left-color:var(--green);} .chk.unc{border-left-color:var(--yellow);} .chk.no{border-left-color:var(--red);}
-  .chkhead{display:flex;align-items:center;gap:6px;cursor:pointer;}
-  .chk .nm{font-size:13px;font-weight:700;color:var(--navy);flex:1;}
-  .chk .badge{font-size:9px;padding:2px 7px;border-radius:8px;font-weight:700;}
-  .caret{font-size:11px;color:#94a3b8;transition:transform .15s;}
-  .chk.open .caret{transform:rotate(90deg);}
-  .detail{display:none;margin-top:9px;padding-top:9px;border-top:1px solid #eef2f7;font-size:12px;color:#475569;}
-  .chk.open .detail{display:block;}
-  .detail p{margin-bottom:6px;} .detail .m{font-size:11px;color:#94a3b8;}
-  .fixbtn{display:inline-block;margin-top:6px;background:var(--navy);color:#fff;font-weight:600;font-size:12px;padding:7px 14px;border-radius:999px;}
-  .spin{text-align:center;padding:22px;color:var(--navy);font-weight:600;}
-  .dots span{display:inline-block;width:9px;height:9px;margin:0 3px;border-radius:50%;background:var(--blue);animation:b 1.2s infinite;}
-  .dots span:nth-child(2){animation-delay:.2s}.dots span:nth-child(3){animation-delay:.4s}
-  @keyframes b{0%,100%{opacity:.3}50%{opacity:1}}
-  section.block{padding:70px 0;} .bg-light{background:var(--light);}
-  .eyebrow{color:var(--green);font-weight:700;letter-spacing:1px;text-transform:uppercase;font-size:13px;text-align:center;}
-  h2.sec{font-size:32px;font-weight:800;color:var(--navy);text-align:center;margin:8px 0 10px;}
-  p.lead{text-align:center;color:var(--grey);max-width:600px;margin:0 auto 40px;font-size:16px;}
-  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;}
-  .feature{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:22px;transition:transform .15s,box-shadow .15s;}
-  .feature:hover{transform:translateY(-4px);box-shadow:0 16px 30px rgba(10,26,64,.08);}
-  .feature .fic{width:50px;height:50px;border-radius:12px;background:var(--navy);display:flex;align-items:center;justify-content:center;margin-bottom:13px;}
-  .feature .fic svg{width:27px;height:27px;}
-  .feature h4{color:var(--navy);font-size:17px;margin-bottom:5px;} .feature p{color:var(--grey);font-size:14px;}
-  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;}
-  .step{text-align:center;} .step .n{width:62px;height:62px;border-radius:50%;background:var(--navy);color:var(--lime);font-weight:800;font-size:25px;display:flex;align-items:center;justify-content:center;margin:0 auto 15px;}
-  .step h4{color:var(--navy);font-size:18px;margin-bottom:5px;} .step p{color:var(--grey);font-size:14px;}
-  .price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;}
-  .price{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:26px 22px;}
-  .price.feat{border:2px solid var(--lime);position:relative;}
-  .price.feat::before{content:"MOST POPULAR";position:absolute;top:-11px;left:22px;background:var(--lime);color:var(--navy);font-size:10px;font-weight:800;padding:4px 11px;border-radius:12px;letter-spacing:1px;}
-  .price h3{font-size:18px;color:var(--navy);} .price .amt{font-size:30px;font-weight:800;color:var(--blue);margin:9px 0;} .price .amt span{font-size:13px;color:#94a3b8;font-weight:600;}
-  .price ul{list-style:none;margin:14px 0;} .price li{font-size:13px;color:#475569;padding:6px 0 6px 22px;position:relative;} .price li::before{content:"✓";position:absolute;left:0;color:var(--green);font-weight:800;}
-  .band{background:linear-gradient(135deg,var(--navy),var(--navy2));color:#fff;border-radius:24px;padding:44px;display:grid;grid-template-columns:1.2fr 1fr;gap:34px;align-items:center;}
-  .band h3{font-size:26px;font-weight:800;margin-bottom:12px;} .band h3 .hl{color:var(--lime);}
-  .band ul{list-style:none;display:grid;gap:11px;} .band li{display:flex;gap:10px;color:#dbe5f7;font-weight:500;} .band li .d{color:var(--lime);font-weight:800;}
-  footer{background:var(--navy);color:#9db4de;padding:44px 0 26px;font-size:14px;}
-  .foot{display:flex;justify-content:space-between;flex-wrap:wrap;gap:22px;} .foot h4{color:#fff;font-size:14px;margin-bottom:9px;} .foot a{color:#9db4de;display:block;margin-bottom:5px;} .foot a:hover{color:var(--lime);}
-  .foot .logo{color:#fff;margin-bottom:9px;} .foot .bot{border-top:1px solid rgba(255,255,255,.1);margin-top:20px;padding-top:16px;text-align:center;font-size:11px;opacity:.8;}
-  .wa-float{position:fixed;bottom:22px;right:22px;width:58px;height:58px;background:#25D366;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:29px;box-shadow:0 4px 16px rgba(0,0,0,.25);z-index:200;}
-  @media(max-width:880px){.hero .wrap{grid-template-columns:1fr;gap:30px;}.hero h1{font-size:34px;}.grid,.steps,.price-grid{grid-template-columns:1fr;}.band{grid-template-columns:1fr;padding:30px;}.nav-links{display:none;}h2.sec{font-size:26px;}}
+  * { margin:0; padding:0; box-sizing:border-box; font-family:'Segoe UI',Arial,sans-serif; }
+  body { background:#F0F4FA; min-height:100vh; }
+  .header { background:linear-gradient(135deg,#1A4A8A,#0D2E5A); padding:24px 18px 28px; }
+  .header .tag { font-size:10px; color:#7FB3FF; letter-spacing:2px; text-transform:uppercase; margin-bottom:4px; }
+  .header h1 { font-size:24px; font-weight:900; color:white; line-height:1.2; }
+  .header p { font-size:13px; color:#B0C8F0; margin-top:6px; }
+  .container { max-width:680px; margin:0 auto; padding:0 14px 50px; }
+  .card { background:white; border-radius:12px; padding:16px; margin-top:14px; box-shadow:0 2px 8px rgba(0,0,0,0.08); }
+  .input-row { display:flex; gap:8px; }
+  input[type=text] { flex:1; padding:12px 14px; border-radius:8px; border:1.5px solid #DDE3EF; font-size:14px; outline:none; }
+  input[type=text]:focus { border-color:#1A4A8A; }
+  button.audit-btn { padding:12px 22px; border-radius:8px; border:none; background:#1A4A8A; color:white; font-weight:700; font-size:14px; cursor:pointer; }
+  button.audit-btn:disabled { background:#999; }
+  .hint { font-size:11px; color:#AAA; margin-top:6px; }
+  .spinner { text-align:center; padding:30px 0; display:none; }
+  .spinner .dots span { display:inline-block; width:10px; height:10px; margin:0 4px; border-radius:50%; background:#1A4A8A; animation:b 1.2s infinite ease-in-out; }
+  .spinner .dots span:nth-child(2){animation-delay:.2s} .spinner .dots span:nth-child(3){animation-delay:.4s}
+  @keyframes b {0%,100%{opacity:.3;transform:scale(.8)}50%{opacity:1;transform:scale(1.2)}}
+  .score-row { display:flex; justify-content:space-between; align-items:flex-start; }
+  .score-big { font-size:44px; font-weight:900; line-height:1; }
+  .stat-row { display:flex; gap:8px; margin-top:14px; }
+  .stat { flex:1; text-align:center; padding:10px 4px; border-radius:8px; }
+  .stat .v { font-size:24px; font-weight:900; }
+  .stat .l { font-size:10px; font-weight:600; margin-top:2px; }
+  .pill-row { display:flex; gap:6px; overflow-x:auto; margin-top:14px; padding-bottom:4px; }
+  .pill { padding:6px 12px; border-radius:16px; border:none; font-size:11px; font-weight:600; white-space:nowrap; cursor:pointer; background:white; color:#555; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
+  .pill.active { background:#1A4A8A; color:white; }
+  .check { background:white; border-radius:10px; margin-top:8px; box-shadow:0 1px 4px rgba(0,0,0,0.07); border-left:4px solid #DDD; overflow:hidden; cursor:pointer; }
+  .check.found { border-left-color:#2E7D32; }
+  .check.uncertain { border-left-color:#F9A825; }
+  .check-head { padding:12px 14px; display:flex; align-items:center; gap:10px; }
+  .check-head .ic { font-size:18px; }
+  .check-head .nm { font-size:13px; font-weight:700; }
+  .badge { font-size:9px; padding:2px 7px; border-radius:8px; font-weight:700; margin-left:6px; }
+  .b-found { background:#E8F5E9; color:#2E7D32; } .b-miss { background:#FFEBEE; color:#C62828; }
+  .b-uncertain { background:#FFF8E1; color:#F57F17; }
+  .b-high { background:#FFEBEE; color:#C62828; } .b-med { background:#FFF8E1; color:#E8680A; } .b-low { background:#F0F4FA; color:#888; }
+  .check .desc { font-size:11px; color:#888; margin-top:2px; }
+  .check-body { padding:0 14px 13px; display:none; }
+  .check.open .check-body { display:block; }
+  .impact-box { font-size:11px; color:#C62828; padding:9px 11px; background:#FFF5F5; border-radius:8px; line-height:1.5; }
+  .meta-box { display:flex; gap:8px; margin-top:8px; }
+  .meta-box div { flex:1; padding:7px 9px; background:#F8FAFF; border-radius:7px; }
+  .meta-box .k { font-size:9px; color:#AAA; text-transform:uppercase; }
+  .meta-box .v { font-size:13px; font-weight:700; color:#1A4A8A; }
+  .pitch { margin-top:16px; padding:14px; background:#FFF3E0; border-radius:10px; border:1.5px solid #E8680A; }
+  .pitch h3 { font-size:13px; color:#E8680A; margin-bottom:6px; }
+  .pitch p { font-size:12px; color:#555; line-height:1.7; }
+  .err { margin-top:14px; padding:14px; background:#FFEBEE; border-radius:10px; border-left:4px solid #C62828; font-size:13px; color:#C62828; display:none; }
+  .site-meta { font-size:11px; color:#888; margin-top:4px; }
+  .platform-chip { display:inline-block; margin-top:6px; font-size:10px; font-weight:600; background:#F0F4FA; color:#555; padding:3px 9px; border-radius:6px; }
 </style>
 </head>
 <body>
-<nav><div class="wrap nav">
-  <div class="logo"><span class="mark"><svg width="22" height="22" viewBox="0 0 100 100"><circle cx="44" cy="42" r="24" fill="none" stroke="#fff" stroke-width="8"/><path d="M34 44 L42 52 L58 34" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><line x1="61" y1="61" x2="82" y2="82" stroke="#fff" stroke-width="9" stroke-linecap="round"/></svg></span> The Website Auditor</div>
-  <div class="nav-links"><a href="#check">What we check</a><a href="#how">How it works</a><a href="#pricing">Pricing</a></div>
-  <a class="btn btn-yellow" onclick="focusUrl()">Scan Now</a>
-</div></nav>
+<div class="header">
+  <div class="container" style="padding-bottom:0">
+    <div class="tag">Website Intelligence Auditor</div>
+    <h1>Is This Website<br>Capturing Leads?</h1>
+    <p>25-point instant audit — analytics, retargeting, lead capture, SEO & AI readiness</p>
+  </div>
+</div>
 
-<header class="hero" id="top">
-  <svg class="ghost" width="520" height="520" viewBox="0 0 100 100"><circle cx="44" cy="42" r="24" fill="none" stroke="#fff" stroke-width="6"/><path d="M34 44 L42 52 L58 34" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><line x1="61" y1="61" x2="86" y2="86" stroke="#fff" stroke-width="7" stroke-linecap="round"/></svg>
-  <div class="wrap">
-    <div>
-      <span class="pill">⚡ Free 60-second website audit</span>
-      <h1>Find what's quietly costing your website <span class="hl">customers.</span></h1>
-      <p class="sub">We scan any site for 25 things every business needs in 2026 — tracking, lead capture, retargeting and whether AI search engines can even find you. Tap any result to see what it means and how to fix it.</p>
+<div class="container">
+  <div class="card">
+    <div style="font-size:12px;font-weight:600;color:#666;margin-bottom:8px">Enter any website URL</div>
+    <div class="input-row">
+      <input type="text" id="url" placeholder="e.g. speedforceev.in" onkeydown="if(event.key==='Enter')runAudit()">
+      <button class="audit-btn" id="btn" onclick="runAudit()">Audit →</button>
     </div>
-    <div class="auditcard" id="audit">
-      <label class="l">Enter a website to audit</label>
-      <input type="text" id="url" placeholder="e.g. yourbusiness.com" onkeydown="if(event.key==='Enter')run()">
-      <div class="subrow">
-        <input type="text" id="name" placeholder="Your name *">
-        <input type="email" id="email" placeholder="Your email *">
-      </div>
-      <button class="btn btn-yellow" id="btn" onclick="run()" style="width:100%;justify-content:center;margin-top:11px;">Scan Now — Free</button>
-      <label class="deep"><input type="checkbox" id="deep"> Deep scan (slower, catches JS-loaded tools)</label>
-      <div class="hint">100% free · we email your full report · reads your live website code</div>
-      <div id="out"></div>
-    </div>
+    <div class="hint">Reads the live HTML source — 100% accurate, no AI guessing</div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer;user-select:none">
+      <input type="checkbox" id="deep" style="width:18px;height:18px;cursor:pointer">
+      <span style="font-size:12px;color:#444"><b>Deep Scan</b> — load the page in a real browser to catch tools added by JavaScript & inside GTM <span style="color:#999">(slower, ~10–15 sec)</span></span>
+    </label>
   </div>
-</header>
 
-<section class="block bg-light" id="check"><div class="wrap">
-  <p class="eyebrow">What we check</p>
-  <h2 class="sec">Your website's full report card</h2>
-  <p class="lead">Most audits only look at Google rankings. We check everything that turns a visitor into a customer.</p>
-  <div class="grid">
-    <div class="feature"><div class="fic"><svg viewBox="0 0 100 100"><line x1="32" y1="72" x2="32" y2="56" stroke="#A3E635" stroke-width="9" stroke-linecap="round"/><line x1="50" y1="72" x2="50" y2="42" stroke="#A3E635" stroke-width="9" stroke-linecap="round"/><line x1="68" y1="72" x2="68" y2="30" stroke="#A3E635" stroke-width="9" stroke-linecap="round"/></svg></div><h4>Analytics &amp; Tracking</h4><p>Know how many people visit, where they come from and what they do.</p></div>
-    <div class="feature"><div class="fic"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="30" fill="none" stroke="#A3E635" stroke-width="7"/><ellipse cx="50" cy="50" rx="14" ry="30" fill="none" stroke="#A3E635" stroke-width="5"/><line x1="20" y1="50" x2="80" y2="50" stroke="#A3E635" stroke-width="5"/></svg></div><h4>AI-Search Ready</h4><p>Make sure ChatGPT, Perplexity &amp; Google AI can find and recommend you.</p></div>
-    <div class="feature"><div class="fic"><svg viewBox="0 0 100 100"><circle cx="42" cy="42" r="24" fill="none" stroke="#A3E635" stroke-width="8"/><line x1="60" y1="60" x2="82" y2="82" stroke="#A3E635" stroke-width="8" stroke-linecap="round"/></svg></div><h4>Retargeting Pixels</h4><p>Bring visitors back with ads on Instagram, Facebook &amp; Google.</p></div>
-    <div class="feature"><div class="fic"><svg viewBox="0 0 100 100"><path d="M22 32 Q22 24 30 24 L70 24 Q78 24 78 32 L78 58 Q78 66 70 66 L42 66 L28 78 L28 66 Q22 66 22 58 Z" fill="none" stroke="#A3E635" stroke-width="6" stroke-linejoin="round"/></svg></div><h4>Lead Capture</h4><p>Turn clicks into enquiries with forms, chat and click-to-WhatsApp.</p></div>
-    <div class="feature"><div class="fic"><svg viewBox="0 0 100 100"><path d="M50 16 L80 27 V52 Q80 73 50 86 Q20 73 20 52 V27 Z" fill="none" stroke="#A3E635" stroke-width="7" stroke-linejoin="round"/><path d="M37 50 L47 60 L65 38" fill="none" stroke="#A3E635" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h4>Trust &amp; SEO</h4><p>SSL, privacy policy, schema, sitemap and the basics Google needs.</p></div>
-    <div class="feature"><div class="fic"><svg viewBox="0 0 100 100"><rect x="30" y="20" width="40" height="60" rx="7" fill="none" stroke="#A3E635" stroke-width="6"/><line x1="44" y1="70" x2="56" y2="70" stroke="#A3E635" stroke-width="6" stroke-linecap="round"/></svg></div><h4>Mobile &amp; Speed</h4><p>Most traffic is mobile — we check it loads fast and looks right.</p></div>
+  <div class="spinner" id="spin">
+    <div style="font-size:15px;font-weight:700;color:#1A4A8A;margin-bottom:10px" id="spin-text">🔍 Fetching live source code…</div>
+    <div class="dots"><span></span><span></span><span></span></div>
   </div>
-</div></section>
 
-<section class="block" id="how"><div class="wrap">
-  <p class="eyebrow">How it works</p>
-  <h2 class="sec">From audit to more customers in 3 steps</h2>
-  <div class="steps">
-    <div class="step"><div class="n">1</div><h4>Free Audit</h4><p>Enter any website above. Get an instant 25-point report in plain language.</p></div>
-    <div class="step"><div class="n">2</div><h4>We Fix It</h4><p>We install the missing tools — tracking, WhatsApp, retargeting, lead forms.</p></div>
-    <div class="step"><div class="n">3</div><h4>You Get Leads</h4><p>Visitors get captured and followed up automatically. Enquiries now reach you.</p></div>
-  </div>
-</div></section>
-
-<section class="block bg-light" id="pricing"><div class="wrap">
-  <p class="eyebrow">Pricing</p>
-  <h2 class="sec">Simple, honest pricing</h2>
-  <p class="lead">The audit is free. You only pay if you want us to fix what we find.</p>
-  <div class="price-grid">
-    <div class="price"><h3>Audit Only</h3><div class="amt">Free</div><ul><li>Full 25-point audit</li><li>Plain-language report</li><li>Emailed to you</li><li>No obligation</li></ul><a class="btn btn-navy" style="width:100%;justify-content:center" onclick="focusUrl()">Start free</a></div>
-    <div class="price feat"><h3>Audit + Setup</h3><div class="amt">₹15,000 <span>one-time</span></div><ul><li>Everything in Audit</li><li>GA4 + Clarity installed</li><li>WhatsApp + lead form</li><li>Meta Pixel + retargeting</li></ul><a class="btn btn-yellow" style="width:100%;justify-content:center" href="https://wa.me/919886650133?text=Hi%20Amit,%20I'd%20like%20the%20Audit%20+%20Setup%20package">Get started</a></div>
-    <div class="price"><h3>Full + Monthly</h3><div class="amt">₹15,000 <span>+ ₹10k/mo</span></div><ul><li>Everything in Setup</li><li>AI chatbot + follow-up</li><li>Automated WhatsApp/email</li><li>Monthly reports</li></ul><a class="btn btn-navy" style="width:100%;justify-content:center" href="https://wa.me/919886650133?text=Hi%20Amit,%20I'd%20like%20the%20Full%20+%20Monthly%20package">Talk to us</a></div>
-  </div>
-</div></section>
-
-<section class="block"><div class="wrap"><div class="band">
-  <div><h3>An SEO guy tells you why Google can't rank you. <span class="hl">We tell you why your website isn't making money.</span></h3><p style="color:#cdd9f0;">Discovery, measurement, retargeting, conversion and AI search — the full funnel, in one scan.</p></div>
-  <ul><li><span class="d">✓</span> Found by Google <b>and</b> AI assistants</li><li><span class="d">✓</span> Every visitor tracked &amp; understood</li><li><span class="d">✓</span> Ad money that actually works</li><li><span class="d">✓</span> Clicks that turn into customers</li></ul>
-</div></div></section>
-
-<footer><div class="wrap">
-  <div class="foot">
-    <div style="max-width:280px"><div class="logo" style="display:flex;align-items:center;gap:9px;font-weight:800;font-size:18px"><span class="mark" style="width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,#A3E635,#65A30D);display:flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 100 100"><circle cx="44" cy="42" r="24" fill="none" stroke="#0A1A40" stroke-width="8"/><path d="M34 44 L42 52 L58 34" fill="none" stroke="#0A1A40" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><line x1="61" y1="61" x2="82" y2="82" stroke="#0A1A40" stroke-width="9" stroke-linecap="round"/></svg></span> The Website Auditor</div><p style="margin-top:8px">Find what's missing. Win more customers.</p></div>
-    <div><h4>Contact</h4><a href="tel:+919886650133">+91 98866 50133</a><a href="mailto:amit.ahuja@thewebsiteauditor.com">amit.ahuja@thewebsiteauditor.com</a><a href="#">Bangalore, Karnataka · serving worldwide</a></div>
-    <div><h4>Links</h4><a href="#check">What we check</a><a href="#how">How it works</a><a href="#pricing">Pricing</a></div>
-  </div>
-  <div class="bot">© 2026 The Website Auditor · Founded by Amit Ahuja · Bangalore, India<br>Privacy: we collect only details you submit, to respond to your enquiry. Compliant with India's DPDP Act 2023.</div>
-</div></footer>
-
-<a href="https://wa.me/919886650133?text=Hi%20Amit,%20I'd%20like%20a%20website%20audit" class="wa-float" title="WhatsApp">💬</a>
+  <div class="err" id="err"></div>
+  <div id="results"></div>
+</div>
 
 <script>
-function focusUrl(){document.getElementById('audit').scrollIntoView({behavior:'smooth',block:'center'});document.getElementById('url').focus();}
-function clearErr(){['url','name','email'].forEach(function(id){document.getElementById(id).style.outline='';});}
-function showErr(id,msg){clearErr();var el=document.getElementById(id);el.focus();el.style.outline='3px solid #EF4444';document.getElementById('out').innerHTML='<div class="scorecard" style="border:1px solid #fecaca;background:#fef2f2;color:#b91c1c;font-weight:600">⚠️ '+msg+'</div>';}
-async function run(){
-  var url=document.getElementById('url').value.trim();
-  var name=document.getElementById('name').value.trim();
-  var email=document.getElementById('email').value.trim();
-  var at=email.indexOf('@');
-  if(!url){showErr('url','Please enter a website to audit.');return;}
-  if(!name){showErr('name','Please enter your name — it is required.');return;}
-  if(!email||at<1||email.indexOf('.',at)<0){showErr('email','Please enter a valid email — we send your full report there.');return;}
-  clearErr();
-  var deep=document.getElementById('deep').checked;
-  var btn=document.getElementById('btn'); btn.disabled=true;
-  document.getElementById('out').innerHTML='<div class="spin">'+(deep?'🌐 Deep scan — loading in a browser…':'🔍 Reading website code…')+'<div class="dots"><span></span><span></span><span></span></div></div>';
-  try{
-    var r=await fetch('/api/audit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:url,deep_scan:deep,email:email,name:name})});
-    var d=await r.json();
-    if(!d.ok)throw new Error(d.error||'Audit failed');
-    show(d);
-  }catch(e){
-    document.getElementById('out').innerHTML='<div class="scorecard" style="border:1px solid #fecaca;background:#fef2f2;color:#b91c1c;font-weight:600">⚠️ '+e.message+'</div>';
-  }finally{ btn.disabled=false; }
+const CAT_COLORS = {
+  "Traffic Intelligence":"#1A4A8A","Behaviour Intelligence":"#E8680A",
+  "Retargeting":"#7B1FA2","Lead Capture":"#2E7D32",
+  "Trust & Security":"#C62828","SEO & Visibility":"#00796B","AI Readiness":"#5E35B1"
+};
+let DATA = null, FILTER = "All";
+
+async function runAudit() {
+  const url = document.getElementById('url').value.trim();
+  if (!url) return;
+  const deep = document.getElementById('deep').checked;
+  document.getElementById('btn').disabled = true;
+  document.getElementById('spin-text').textContent = deep
+    ? '🌐 Deep scan — loading page in a real browser…'
+    : '🔍 Fetching live source code…';
+  document.getElementById('spin').style.display = 'block';
+  document.getElementById('err').style.display = 'none';
+  document.getElementById('results').innerHTML = '';
+  try {
+    const res = await fetch('/api/audit', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({url, deep_scan: deep})
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Audit failed');
+    DATA = data; FILTER = "All";
+    render();
+  } catch(e) {
+    const errBox = document.getElementById('err');
+    errBox.textContent = '⚠️ ' + e.message;
+    errBox.style.display = 'block';
+  } finally {
+    document.getElementById('btn').disabled = false;
+    document.getElementById('spin').style.display = 'none';
+  }
 }
-function tog(el){ el.parentNode.classList.toggle('open'); }
-function show(d){
-  var sc=d.score>=70?'#65A30D':d.score>=40?'#CA8A04':'#EF4444';
-  var h='<div class="scorecard">';
-  h+='<div class="scorehead"><div><div class="meta">AUDIT COMPLETE</div><div class="dom">'+d.domain+'</div><div class="meta">'+d.platform+' · '+d.scan_mode+' scan · '+(d.load_ms||0)+'ms</div></div><div class="score" style="color:'+sc+'">'+d.score+'%</div></div>';
-  h+='<div class="stat-row"><div class="stat" style="background:#ecfccb"><div class="v" style="color:#65A30D">'+d.found+'</div><div class="s" style="color:#65A30D">Working</div></div>';
-  if(d.uncertain>0)h+='<div class="stat" style="background:#fef9c3"><div class="v" style="color:#CA8A04">'+d.uncertain+'</div><div class="s" style="color:#CA8A04">Via GTM?</div></div>';
-  h+='<div class="stat" style="background:#fee2e2"><div class="v" style="color:#EF4444">'+d.missing+'</div><div class="s" style="color:#EF4444">Missing</div></div>';
-  h+='<div class="stat" style="background:#ffedd5"><div class="v" style="color:#EA580C">'+d.critical_gaps+'</div><div class="s" style="color:#EA580C">Critical</div></div></div>';
-  if(d.email_sent)h+='<div class="emailnote" style="background:#ecfccb;color:#3f6212">📧 Full report sent to your email!</div>';
-  else if(d.email_msg)h+='<div class="emailnote" style="background:#fef9c3;color:#854d0e">Note: email not sent ('+d.email_msg+')</div>';
-  h+='</div>';
-  h+='<div class="hint" style="margin:13px 0 2px">Tap any check below to see what it means and how to fix it.</div>';
-  var lastCat='';
-  d.checks.forEach(function(c){
-    if(c.category&&c.category!==lastCat){ h+='<div class="cathead">'+c.category+'</div>'; lastCat=c.category; }
-    var st=c.found?'ok':(c.uncertain?'unc':'no');
-    var ic=c.found?(c.icon||'✓'):(c.uncertain?'❓':'❌');
-    var bg=c.found?'background:#ecfccb;color:#3f6212':(c.uncertain?'background:#fef9c3;color:#854d0e':'background:#fee2e2;color:#b91c1c');
-    var lbl=c.found?'✓ FOUND':(c.uncertain?'❓ MAYBE':'✗ MISSING');
-    var det='<p><b>What it does:</b> '+c.description+'</p>';
-    if(c.found){ det+='<p style="color:#3f6212"><b>✓ Set up correctly</b> on this website.</p>'; }
-    else if(c.uncertain){ det+='<p>'+(c.warning||'A Google Tag Manager container is present, so this may be firing inside it. Run a deep scan to confirm.')+'</p>'; }
-    else {
-      det+='<p><b>Why it matters:</b> '+(c.missing_msg||'This is missing and worth adding to your site.')+'</p>';
-      det+='<p class="m">Impact: '+c.impact+'  ·  Typical fix: '+c.fix_time+'  ·  Cost: '+c.cost+'</p>';
-      det+='<a class="fixbtn" target="_blank" href="https://wa.me/919886650133?text='+encodeURIComponent('Hi Amit, I want to fix '+c.name+' on '+d.domain)+'">Fix this for me →</a>';
-    }
-    h+='<div class="chk '+st+'"><div class="chkhead" onclick="tog(this)"><span class="nm">'+ic+' '+c.name+'</span><span class="badge" style="'+bg+'">'+lbl+'</span><span class="caret">▸</span></div><div class="detail">'+det+'</div></div>';
-  });
-  document.getElementById('out').innerHTML=h;
+
+function render() {
+  const d = DATA;
+  const sc = d.score >= 70 ? '#2E7D32' : d.score >= 40 ? '#E8680A' : '#C62828';
+  const scLbl = d.score >= 70 ? 'Good Setup' : d.score >= 40 ? 'Needs Work' : 'Critical Gaps';
+  const cats = ["All", ...new Set(d.checks.map(c => c.category))];
+  const visible = d.checks.filter(c => FILTER === "All" || c.category === FILTER);
+  const missingNames = d.checks.filter(c => !c.found && !c.uncertain).map(c => c.name).join('  ·  ');
+  const uncertainNames = d.checks.filter(c => c.uncertain).map(c => c.name).join('  ·  ');
+
+  document.getElementById('results').innerHTML = `
+    <div class="card" style="border-top:4px solid ${sc}">
+      <div class="score-row">
+        <div>
+          <div style="font-size:10px;color:#AAA;text-transform:uppercase;letter-spacing:1px">Audit Complete</div>
+          <div style="font-size:17px;font-weight:800;margin-top:2px">${d.domain}</div>
+          ${d.page_title ? `<div class="site-meta">"${d.page_title}"</div>` : ''}
+          <span class="platform-chip">🏗 ${d.platform} · ⚡ ${d.load_ms}ms load</span>
+          <span class="platform-chip" style="background:${d.scan_mode==='deep'?'#E8F5E9':'#F0F4FA'};color:${d.scan_mode==='deep'?'#2E7D32':'#777'}">${d.scan_mode==='deep'?'🌐 Deep Scan (browser-rendered)':'⚡ Fast Scan (HTML source)'}</span>
+        </div>
+        <div style="text-align:center">
+          <div class="score-big" style="color:${sc}">${d.score}%</div>
+          <div style="font-size:10px;font-weight:700;color:${sc}">${scLbl}</div>
+        </div>
+      </div>
+      <div class="stat-row">
+        <div class="stat" style="background:#E8F5E9"><div class="v" style="color:#2E7D32">${d.found}</div><div class="l" style="color:#2E7D32">Installed</div></div>
+        ${d.uncertain > 0 ? `<div class="stat" style="background:#FFF8E1"><div class="v" style="color:#F57F17">${d.uncertain}</div><div class="l" style="color:#F57F17">Via GTM?</div></div>` : ''}
+        <div class="stat" style="background:#FFEBEE"><div class="v" style="color:#C62828">${d.missing}</div><div class="l" style="color:#C62828">Missing</div></div>
+        <div class="stat" style="background:#FFF3E0"><div class="v" style="color:#E8680A">${d.critical_gaps}</div><div class="l" style="color:#E8680A">Critical</div></div>
+      </div>
+      ${d.gtm_present && d.uncertain > 0 ? `
+        <div style="margin-top:12px;padding:10px 12px;background:#FFF8E1;border-radius:8px;border-left:3px solid #F9A825">
+          <div style="font-size:11px;font-weight:700;color:#F57F17;margin-bottom:3px">🏷️ Google Tag Manager detected</div>
+          <div style="font-size:11px;color:#7A5C00;line-height:1.5">${d.uncertain} tool(s) not found directly in the page source, but they may be firing inside the GTM container. A deep scan is recommended to confirm before telling the client these are missing.</div>
+        </div>` : ''}
+    </div>
+
+    <div class="pill-row">
+      ${cats.map(c => `<button class="pill ${FILTER===c?'active':''}" onclick="FILTER='${c}';render()">${c}</button>`).join('')}
+    </div>
+
+    <div id="checks">
+      ${visible.map((c,i) => {
+        const state = c.found ? 'found' : c.uncertain ? 'uncertain' : 'miss';
+        const icon = c.found ? c.icon : c.uncertain ? '❓' : '❌';
+        const badge = c.found
+          ? '<span class="badge b-found">✓ FOUND</span>'
+          : c.uncertain
+            ? '<span class="badge b-uncertain">❓ MAYBE (via GTM)</span>'
+            : '<span class="badge b-miss">✗ MISSING</span>';
+        return `
+        <div class="check ${state}" onclick="this.classList.toggle('open')">
+          <div class="check-head">
+            <span class="ic">${icon}</span>
+            <div style="flex:1">
+              <span class="nm">${c.name}</span>
+              ${badge}
+              <span class="badge ${c.impact==='HIGH'?'b-high':c.impact==='MEDIUM'?'b-med':'b-low'}">${c.impact}</span>
+              <div class="desc">${c.description}</div>
+              ${c.warning ? `<div style="font-size:10px;color:${c.uncertain?'#F57F17':'#C62828'};font-weight:700;margin-top:3px">⚠️ ${c.warning}</div>` : ''}
+            </div>
+            <span style="font-size:10px;color:#CCC">▼</span>
+          </div>
+          <div class="check-body">
+            ${c.found
+              ? `<div style="font-size:11px;color:#2E7D32;font-weight:600;padding:9px 11px;background:#E8F5E9;border-radius:8px">✅ Active — ${c.description}</div>`
+              : c.uncertain
+                ? `<div style="font-size:11px;color:#7A5C00;padding:9px 11px;background:#FFF8E1;border-radius:8px;line-height:1.5">❓ Not found in page source, but a GTM container is present. This tool is often loaded through GTM, so it may already be active. Verify inside the client's GTM dashboard before reporting it as missing.</div>`
+                : `<div class="impact-box">🚨 <strong>What's being lost:</strong> ${c.missing_msg}</div>
+                   <div class="meta-box">
+                     <div><div class="k">Fix Time</div><div class="v">${c.fix_time}</div></div>
+                     <div><div class="k">Cost</div><div class="v" style="color:#2E7D32">${c.cost}</div></div>
+                   </div>`}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+
+    ${d.missing > 0 ? `
+      <div class="pitch">
+        <h3>📋 Sales Pitch — Ready to Use</h3>
+        <p><strong>${d.domain}</strong> is missing <strong style="color:#C62828">${d.critical_gaps} critical</strong>
+        and <strong>${d.missing - d.critical_gaps} other</strong> tools. Every month without them,
+        visitor data is lost permanently. Most fixes are free and take under 3 hours total.</p>
+        <p style="margin-top:8px;padding:8px 10px;background:white;border-radius:8px"><strong>Confirmed missing:</strong> ${missingNames}</p>
+        ${uncertainNames ? `<p style="margin-top:6px;padding:8px 10px;background:#FFF8E1;border-radius:8px;font-size:11px"><strong>Verify in GTM:</strong> ${uncertainNames}</p>` : ''}
+      </div>` : ''}
+  `;
 }
 </script>
 </body>

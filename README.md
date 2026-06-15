@@ -1,58 +1,73 @@
-# The Website Auditor — Complete Site + Tool
+# Website Intelligence Auditor — Standalone
 
-ONE web page that:
-1. Looks like a professional homepage (hero, how-it-works, pricing)
-2. Runs a live 25-point audit on any website the visitor enters
-3. Emails the full report to the visitor (and a lead alert to you)
+Your own website audit tool. Paste any URL → instant 25-point report.
+Reads the live HTML source directly = 100% accurate results.
 
-Built for: Amit Ahuja · thewebsiteauditor.com · +91 98866 50133
+## Run on your computer (2 minutes)
 
-## Run on your computer
-    pip install -r requirements.txt
-    playwright install chromium          (one time, for deep scan)
-    uvicorn main:app --port 8000
-Open http://localhost:8000
+1. Install Python 3.10+ from python.org
+2. Open terminal/command prompt in this folder
+3. Run:
+   pip install -r requirements.txt
+   uvicorn main:app --port 8000
+4. Open http://localhost:8000 in your browser. Done.
 
-## Deploy on Render (free) — this is how it goes live on your domain
+## Deploy free on the internet (10 minutes)
 
-1. Put main.py, requirements.txt, README.md in a GitHub repo
-2. render.com -> New -> Web Service -> connect the repo
-3. Build command:
-       pip install -r requirements.txt && playwright install --with-deps chromium
-4. Start command:
-       uvicorn main:app --host 0.0.0.0 --port $PORT
-5. Render gives you a URL like thewebsiteauditor.onrender.com
-6. Settings -> Custom Domain -> add thewebsiteauditor.com
-7. Render shows DNS records -> paste them in Squarespace (your domain's DNS)
+### Option A — Render.com (easiest)
+1. Create free account at render.com
+2. Push this folder to a GitHub repository
+3. In Render: New → Web Service → connect your repo
+4. Build command:  pip install -r requirements.txt
+5. Start command:  uvicorn main:app --host 0.0.0.0 --port $PORT
+6. Deploy. You get a free URL like youraudit.onrender.com
 
-Your Google Workspace email keeps working — different DNS records.
+### Option B — Railway.app
+1. railway.app → New Project → Deploy from GitHub
+2. Railway auto-detects Python. Set start command:
+   uvicorn main:app --host 0.0.0.0 --port $PORT
 
-## EMAIL SETUP (so reports actually send)
+### Custom domain
+Both platforms let you attach your own domain (e.g. audit.bharatriders.in)
+in their dashboard settings for free.
 
-The tool sends email via SMTP. With Google Workspace:
+## What it checks (25 points)
 
-1. Turn on 2-Step Verification for amit.ahuja@thewebsiteauditor.com
-2. Create an "App Password" (Google Account -> Security -> App Passwords)
-3. In Render -> Environment, add these variables:
-       SMTP_HOST   = smtp.gmail.com
-       SMTP_PORT   = 587
-       SMTP_USER   = amit.ahuja@thewebsiteauditor.com
-       SMTP_PASS   = (the 16-character app password)
-       FROM_EMAIL  = amit.ahuja@thewebsiteauditor.com
-       OWNER_EMAIL = amit.ahuja@thewebsiteauditor.com
-
-Without these, the audit still works — it just won't email the report
-(it shows a small note instead). Add them anytime to switch email on.
+Traffic: GA4, old UA detection, Google Tag Manager
+Behaviour: Microsoft Clarity, Hotjar
+Retargeting: Meta Pixel, Google Ads, LinkedIn Insight
+Lead Capture: WhatsApp button, live chat, forms, exit popups, click-to-call
+Trust: SSL, privacy policy (DPDP Act), testimonials
+SEO: schema, Open Graph, meta description, sitemap, mobile, favicon
+AI Readiness: llms.txt, H1 structure, canonical tags
 
 ## Two scan modes
-FAST (default): reads raw HTML, ~1-2 sec. Great for SME sites.
-DEEP (checkbox): loads page in real browser, catches JS-injected tools.
 
-## The 25 checks
-Traffic: GA4, old-UA detection, Tag Manager
-Behaviour: Microsoft Clarity, Hotjar
-Retargeting: Meta Pixel, Google Ads, LinkedIn
-Lead Capture: WhatsApp, live chat, forms, exit popups, click-to-call
-Trust: SSL, privacy policy, testimonials
-SEO: schema, Open Graph, meta description, sitemap, mobile, favicon
-AI Readiness: llms.txt, H1 structure, canonical
+FAST scan (default): reads the raw HTML source in ~1-2 seconds. Highly
+accurate for SME websites that embed scripts directly in HTML. When it
+sees a GTM container but not a specific tag, it marks that tag "MAYBE
+(via GTM)" instead of a flat missing.
+
+DEEP scan (tick the checkbox): loads the page in a real headless Chrome
+browser, waits for ALL JavaScript to run, then reads the fully-rendered
+HTML. This catches tracking tags injected after page load and tools
+fired inside GTM - removing any false "missing" results. Takes ~10-15
+seconds per site.
+
+After installing requirements, run this ONCE to download the browser:
+    playwright install chromium
+
+If the browser isn't installed, deep scan automatically falls back to
+fast scan, so the tool never breaks.
+
+### Deploy note for deep scan
+Deep scan needs more memory (a browser). On Render/Railway free tiers it
+may be slow or time out. Options:
+- Keep deep scan for local use, fast scan for the hosted version, OR
+- Use a paid tier (~$7-25/mo) with more RAM for full deep scan in the cloud.
+On Render, add this to your build command so the browser installs:
+    pip install -r requirements.txt && playwright install --with-deps chromium
+
+## Business use
+
+This tool is yours. Brand it, put it on your domain, charge for audits.
