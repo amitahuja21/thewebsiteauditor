@@ -13,6 +13,7 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 from urllib.parse import urlparse
 
 import requests
@@ -436,16 +437,22 @@ def build_report_html(result: dict, visitor_name: str = "") -> str:
     </div></body></html>"""
 
 
-def send_email(to_email: str, subject: str, html_body: str) -> tuple[bool, str]:
+def send_email(to_email: str, subject: str, html_body: str, pdf_bytes: bytes = None, pdf_name: str = "website-audit.pdf") -> tuple[bool, str]:
     """Send an HTML email via SMTP. Returns (success, message)."""
     if not SMTP_USER or not SMTP_PASS:
         return False, "Email not configured on server (SMTP_USER/SMTP_PASS missing)."
     try:
-        msg = MIMEMultipart("alternative")
+        msg = MIMEMultipart("mixed")
         msg["Subject"] = subject
         msg["From"] = FROM_EMAIL
         msg["To"] = to_email
-        msg.attach(MIMEText(html_body, "html"))
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText(html_body, "html"))
+        msg.attach(alt)
+        if pdf_bytes:
+            part = MIMEApplication(pdf_bytes, _subtype="pdf")
+            part.add_header("Content-Disposition", "attachment", filename=pdf_name)
+            msg.attach(part)
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
@@ -455,9 +462,72 @@ def send_email(to_email: str, subject: str, html_body: str) -> tuple[bool, str]:
         return False, f"{e.__class__.__name__}: {e}"
 
 
+
+def build_report_pdf(result: dict, visitor_name: str = ""):
+    """Build a branded PDF of the full audit. Returns PDF bytes, or None on failure."""
+    try:
+        from fpdf import FPDF
+    except Exception:
+        return None
+    try:
+        from datetime import datetime
+        def s(t):
+            t = str(t if t is not None else "")
+            for k, v in {"\u20b9":"Rs ","\u2014":"-","\u2013":"-","\u2019":"'","\u2018":"'",
+                         "\u201c":'"',"\u201d":'"',"\u2022":"-","\u2192":"->","\u00b7":"-"}.items():
+                t = t.replace(k, v)
+            return t.encode("latin-1", "ignore").decode("latin-1")
+        NAVY=(10,26,64); GREEN=(101,163,13); RED=(220,38,38); AMBER=(202,138,4); GREY=(90,100,120)
+        pdf = FPDF(format="A4"); pdf.set_auto_page_break(True, margin=16); pdf.add_page()
+        W = pdf.w - 2*pdf.l_margin
+        pdf.set_fill_color(*NAVY); pdf.rect(0,0,pdf.w,30,"F")
+        pdf.set_xy(pdf.l_margin,8); pdf.set_text_color(255,255,255); pdf.set_font("Helvetica","B",18)
+        pdf.cell(0,8,s("The Website Auditor"),ln=1)
+        pdf.set_x(pdf.l_margin); pdf.set_text_color(163,230,53); pdf.set_font("Helvetica","",10)
+        pdf.cell(0,5,s("Website Health Report"),ln=1)
+        pdf.ln(12)
+        pdf.set_text_color(*NAVY); pdf.set_font("Helvetica","B",13)
+        pdf.cell(0,7,s(result.get("domain","")),ln=1)
+        pdf.set_font("Helvetica","",10); pdf.set_text_color(*GREY)
+        pdf.cell(0,5,s("Prepared for: "+(visitor_name or "You")+"    Platform: "+str(result.get("platform","-"))+"    Scan: "+str(result.get("scan_mode","-"))),ln=1)
+        pdf.cell(0,5,s("Date: "+datetime.utcnow().strftime("%d %b %Y")),ln=1)
+        pdf.ln(3)
+        score = result.get("score",0); col = GREEN if score>=70 else (AMBER if score>=40 else RED)
+        y0=pdf.get_y(); pdf.set_fill_color(238,242,247); pdf.set_draw_color(220,228,238); pdf.rect(pdf.l_margin,y0,W,22,"DF")
+        pdf.set_xy(pdf.l_margin+4,y0+3); pdf.set_text_color(*col); pdf.set_font("Helvetica","B",26); pdf.cell(34,16,s(str(score)+"%"))
+        pdf.set_xy(pdf.l_margin+42,y0+4); pdf.set_text_color(*NAVY); pdf.set_font("Helvetica","B",11); pdf.cell(0,6,s("Overall Health Score"),ln=2)
+        pdf.set_x(pdf.l_margin+42); pdf.set_font("Helvetica","",9); pdf.set_text_color(*GREY)
+        pdf.cell(0,5,s("Working: "+str(result.get("found",0))+"    Maybe via GTM: "+str(result.get("uncertain",0))+"    Missing: "+str(result.get("missing",0))+"    Critical: "+str(result.get("critical_gaps",0))))
+        pdf.ln(18)
+        last=""
+        for c in result.get("checks",[]):
+            cat=c.get("category","")
+            if cat and cat!=last:
+                pdf.ln(2); pdf.set_font("Helvetica","B",11); pdf.set_text_color(*NAVY); pdf.cell(0,7,s(cat),ln=1); last=cat
+            if c.get("found"): stcol=GREEN; lbl="FOUND"
+            elif c.get("uncertain"): stcol=AMBER; lbl="MAYBE"
+            else: stcol=RED; lbl="MISSING"
+            pdf.set_font("Helvetica","B",10); pdf.set_text_color(*stcol); pdf.cell(24,6,s("["+lbl+"]"))
+            pdf.set_text_color(*NAVY); pdf.cell(0,6,s(c.get("name","")),ln=1)
+            pdf.set_font("Helvetica","",9); pdf.set_text_color(*GREY)
+            pdf.set_x(pdf.l_margin+24); pdf.multi_cell(W-24,4.6,s(c.get("description","")))
+            if not c.get("found") and not c.get("uncertain") and c.get("missing_msg"):
+                pdf.set_x(pdf.l_margin+24); pdf.set_text_color(150,60,60); pdf.multi_cell(W-24,4.6,s("Why it matters: "+c.get("missing_msg","")))
+                pdf.set_x(pdf.l_margin+24); pdf.set_text_color(*GREY); pdf.multi_cell(W-24,4.6,s("Impact: "+str(c.get("impact","-"))+"   Fix: "+str(c.get("fix_time","-"))+"   Cost: "+str(c.get("cost","-"))))
+            pdf.ln(1.5)
+        pdf.ln(3); pdf.set_draw_color(220,228,238); pdf.line(pdf.l_margin,pdf.get_y(),pdf.w-pdf.r_margin,pdf.get_y()); pdf.ln(3)
+        pdf.set_font("Helvetica","B",10); pdf.set_text_color(*NAVY); pdf.cell(0,6,s("Want us to fix these for you?"),ln=1)
+        pdf.set_font("Helvetica","",9); pdf.set_text_color(*GREY)
+        pdf.cell(0,5,s("The Website Auditor  |  +91 98866 50133  |  amit.ahuja@thewebsiteauditor.com"),ln=1)
+        pdf.cell(0,5,s("WhatsApp: https://wa.me/919886650133"),ln=1)
+        return bytes(pdf.output())
+    except Exception:
+        return None
+
+
 @app.post("/api/audit")
 def audit(req: AuditRequest):
-    # Name and email are compulsory — every audit must capture a lead.
+    # Name and email are compulsory - every audit must capture a lead.
     _name = (req.name or "").strip()
     _email = (req.email or "").strip()
     if not _name or not _email or "@" not in _email or "." not in _email.split("@")[-1]:
@@ -571,11 +641,13 @@ def audit(req: AuditRequest):
     email = (req.email or "").strip()
     if email and "@" in email:
         report_html = build_report_html(result, req.name)
+        pdf_bytes = build_report_pdf(result, req.name)
+        pdf_name = f"website-audit-{domain}.pdf"
         # 1) Send report to the visitor
         ok_visitor, msg_v = send_email(
             email,
             f"Your Website Health Report — {domain} ({score}%)",
-            report_html,
+            report_html, pdf_bytes, pdf_name,
         )
         # 2) Send a copy/lead alert to the owner (Amit)
         if OWNER_EMAIL:
@@ -585,10 +657,11 @@ def audit(req: AuditRequest):
                 f"<b>Email:</b> {email}<br>"
                 f"<b>Website audited:</b> {domain} — scored {score}%</p>"
             )
-            send_email(OWNER_EMAIL, f"New lead: {email} audited {domain}", lead_note + report_html)
+            send_email(OWNER_EMAIL, f"New lead: {email} audited {domain}", lead_note + report_html, pdf_bytes, pdf_name)
 
         result["email_sent"] = ok_visitor
         result["email_msg"] = msg_v
+        result["pdf_attached"] = bool(pdf_bytes)
 
     return result
 
