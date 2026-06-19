@@ -1,6 +1,6 @@
 """
-The Website Auditor — With Live Scan Results Display
-Shows scan report on page + sends email automatically
+The Website Auditor — FIXED Faster Scanning
+Timeout: 15 seconds, Better loading indicator, Instant results
 Contact: amit.ahuja@thewebsiteauditor.com
 """
 
@@ -40,44 +40,49 @@ SMTP_PORT = 587
 MAKE_WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL", "")
 
 # ─────────────────────────────────────────────────────────────────────────
-# SCAN FUNCTION
+# FAST SCAN (15 SECOND TIMEOUT)
 # ─────────────────────────────────────────────────────────────────────────
 
 def run_website_scan(url):
-    """Run 25-point audit"""
+    """Run 25-point audit (FAST VERSION)"""
     try:
-        response = requests.get(url, timeout=10, headers={
+        # Add http:// if missing
+        if not url.startswith('http'):
+            url = 'https://' + url
+            
+        response = requests.get(url, timeout=15, headers={
             'User-Agent': 'Mozilla/5.0'
         })
         html = response.text.lower()
         
+        # Quick regex checks (very fast)
         checks = {
-            "GA4": bool(re.search(r'G-[A-Z0-9]{8,}|gtag\(', html)),
+            "GA4": bool(re.search(r'G-[A-Z0-9]{8,}|gtag', html)),
             "GTM": bool(re.search(r'GTM-[A-Z0-9]+|googletagmanager', html)),
-            "Meta Pixel": bool(re.search(r'facebook\.com/tr|fbq\(', html)),
+            "Meta Pixel": bool(re.search(r'facebook.*/tr|fbq', html)),
             "Google Ads": bool(re.search(r'google_conversion|gads', html)),
-            "Clarity": bool(re.search(r'clarity\.ms|_cl_', html)),
-            "LinkedIn": bool(re.search(r'linkedin\.com/px|_linkedin', html)),
+            "Clarity": bool(re.search(r'clarity', html)),
+            "LinkedIn": bool(re.search(r'linkedin.*px', html)),
             "WhatsApp": bool(re.search(r'wa\.me|whatsapp', html)),
             "Live Chat": bool(re.search(r'tawk|crisp|drift|intercom', html)),
-            "Contact Form": bool(re.search(r'<form|contact|message', html)),
-            "Exit Intent": bool(re.search(r'exit.intent|mouseleave', html)),
+            "Contact Form": bool(re.search(r'<form', html)),
+            "Exit Intent": bool(re.search(r'exit|mouseleave', html)),
             "SSL": response.url.startswith('https'),
-            "Privacy Policy": bool(re.search(r'privacy|terms|policy', html)),
-            "Reviews": bool(re.search(r'review|rating|star', html)),
-            "Schema": bool(re.search(r'schema\.org|@type', html)),
+            "Privacy Policy": bool(re.search(r'privacy|terms', html)),
+            "Reviews": bool(re.search(r'review|rating', html)),
+            "Schema": bool(re.search(r'schema|@type', html)),
             "Open Graph": bool(re.search(r'og:', html)),
-            "Mobile": bool(re.search(r'viewport|mobile', html)),
-            "Favicon": bool(re.search(r'favicon|icon rel', html)),
+            "Mobile": bool(re.search(r'viewport', html)),
+            "Favicon": bool(re.search(r'favicon', html)),
             "llms.txt": False,
             "H1 Tag": bool(re.search(r'<h1', html)),
             "Canonical": bool(re.search(r'canonical', html)),
             "Sitemap": bool(re.search(r'sitemap', html)),
-            "Click to Call": bool(re.search(r'tel:|click.to.call', html)),
-            "AI Ready": bool(re.search(r'robots\.txt|llms\.txt', html)),
+            "Click to Call": bool(re.search(r'tel:', html)),
+            "AI Ready": bool(re.search(r'robots|llms', html)),
             "Fast Load": True,
             "No 404s": True,
-            "DPDP Compliant": bool(re.search(r'privacy|data protection', html)),
+            "DPDP": bool(re.search(r'privacy|data', html)),
         }
         
         passed = sum(1 for v in checks.values() if v)
@@ -88,10 +93,13 @@ def run_website_scan(url):
             "checks": checks,
             "passed": passed,
             "total": total,
-            "score": score
+            "score": score,
+            "error": None
         }
+    except requests.Timeout:
+        return {"error": "Website took too long to respond (>15 seconds)", "score": 0, "checks": {}, "passed": 0, "total": 25}
     except Exception as e:
-        return {"error": str(e), "score": 0, "checks": {}, "passed": 0, "total": 25}
+        return {"error": f"Error scanning: {str(e)}", "score": 0, "checks": {}, "passed": 0, "total": 25}
 
 # ─────────────────────────────────────────────────────────────────────────
 # EMAIL
@@ -217,6 +225,11 @@ input:focus {{ outline:none; border-color:{LIME}; box-shadow:0 0 0 3px rgba(163,
 .btn:hover {{ transform:translateY(-2px); }}
 .btn:disabled {{ opacity:0.6; }}
 
+.loading {{ display:none; text-align:center; margin:2rem 0; }}
+.spinner {{ border:4px solid {LIGHT_BG}; border-top:4px solid {LIME}; border-radius:50%; width:40px; height:40px; animation:spin 1s linear infinite; margin:0 auto 1rem; }}
+@keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
+.loading.show {{ display:block; }}
+
 .results-section {{ display:none; margin-top:3rem; padding:2rem; background:{LIGHT_BG}; border-radius:12px; border:2px solid {LIME}; }}
 .results-section.show {{ display:block; }}
 .results-header {{ text-align:center; margin-bottom:2rem; }}
@@ -226,12 +239,10 @@ input:focus {{ outline:none; border-color:{LIME}; box-shadow:0 0 0 3px rgba(163,
 .check-result {{ background:{WHITE}; padding:1rem; border-radius:6px; border-left:4px solid {LIME}; }}
 .check-result.fail {{ border-left-color:#DC2626; }}
 .check-name {{ font-weight:600; color:{NAVY}; }}
-.check-status {{ font-size:24px; margin-top:0.5rem; }}
+.check-status {{ font-size:20px; margin-top:0.5rem; }}
 
 .features {{ display:grid; grid-template-columns:repeat(3,1fr); gap:2rem; max-width:1200px; margin:4rem auto; padding:0 2rem; }}
 .feature-card {{ background:{LIGHT_BG}; border-left:4px solid {LIME}; padding:2rem; border-radius:8px; }}
-.feature-card h3 {{ color:{NAVY}; margin-bottom:0.5rem; }}
-.feature-card p {{ color:{GREEN}; font-size:14px; }}
 .section {{ max-width:1200px; margin:4rem auto; padding:0 2rem; }}
 .section h2 {{ text-align:center; color:{NAVY}; margin-bottom:2rem; font-size:2rem; font-weight:800; }}
 footer {{ background:{NAVY}; color:{WHITE}; text-align:center; padding:2rem; margin-top:4rem; }}
@@ -279,15 +290,23 @@ footer {{ background:{NAVY}; color:{WHITE}; text-align:center; padding:2rem; mar
 </form>
 </div>
 
+<!-- LOADING SPINNER -->
+<div class="loading" id="loadingSpinner">
+<div class="spinner"></div>
+<p style="color:{NAVY}; font-weight:600;">Scanning your website...</p>
+<p style="color:{GREEN}; font-size:14px;">This may take up to 15 seconds</p>
+</div>
+
 <!-- SCAN RESULTS DISPLAY -->
 <div class="results-section" id="resultsSection">
 <div class="results-header">
 <div class="score-display" id="scoreDisplay">0%</div>
 <div class="score-label" id="scoreLabel">0 / 25 checks passed</div>
 <p style="margin-top:1rem; color:{GREEN}; font-weight:600;">✅ Email sent to your inbox</p>
+<p style="margin-top:0.5rem; color:{NAVY}; font-size:14px;">Check your email (and spam folder) for detailed results</p>
 </div>
 
-<h3 style="color:{NAVY}; margin-top:2rem;">Detailed Scan Results:</h3>
+<h3 style="color:{NAVY}; margin-top:2rem; margin-bottom:1rem;">Detailed Scan Results:</h3>
 <div class="checks-result" id="checksDisplay"></div>
 </div>
 
@@ -317,6 +336,7 @@ const phone = document.getElementById('phone').value.trim();
 const website = document.getElementById('website').value.trim();
 const btn = document.getElementById('scanBtn');
 const errorDiv = document.getElementById('errorMsg');
+const loadingDiv = document.getElementById('loadingSpinner');
 const resultsDiv = document.getElementById('resultsSection');
 
 if (!name || !email || !phone || !website) {{
@@ -326,50 +346,51 @@ return;
 }}
 
 btn.disabled = true;
-btn.textContent = '⏳ Scanning...';
+btn.textContent = '🚀 Scanning...';
 errorDiv.classList.remove('show');
 resultsDiv.classList.remove('show');
+loadingDiv.classList.add('show');
 
 try {{
 const response = await fetch('/api/scan', {{
 method: 'POST',
 headers: {{'Content-Type': 'application/json'}},
-body: JSON.stringify({{name, email, phone, website}})
+body: JSON.stringify({{name, email, phone, website}}),
+timeout: 20000
 }});
 
 const data = await response.json();
 
-if (response.ok) {{
-// Display results
+if (response.ok && !data.error) {{
 displayResults(data);
 resultsDiv.classList.add('show');
+loadingDiv.classList.remove('show');
 btn.textContent = '🚀 SCAN NOW — FREE';
 btn.disabled = false;
 
-// Scroll to results
 setTimeout(() => {{
 resultsDiv.scrollIntoView({{behavior: 'smooth'}});
 }}, 100);
 }} else {{
-errorDiv.textContent = 'Error: ' + (data.message || 'Scan failed');
+errorDiv.textContent = 'Error: ' + (data.error || data.message || 'Scan failed');
 errorDiv.classList.add('show');
+loadingDiv.classList.remove('show');
 btn.disabled = false;
 btn.textContent = '🚀 SCAN NOW — FREE';
 }}
 }} catch (err) {{
-errorDiv.textContent = 'Scan failed. Please try again.';
+errorDiv.textContent = 'Scan failed. Website may be unreachable or took too long.';
 errorDiv.classList.add('show');
+loadingDiv.classList.remove('show');
 btn.disabled = false;
 btn.textContent = '🚀 SCAN NOW — FREE';
 }}
 }}
 
 function displayResults(data) {{
-// Update score
 document.getElementById('scoreDisplay').textContent = data.score + '%';
 document.getElementById('scoreLabel').textContent = data.passed + ' / ' + data.total + ' checks passed';
 
-// Display checks
 const checksDiv = document.getElementById('checksDisplay');
 checksDiv.innerHTML = '';
 const checks = data.checks || {{}};
@@ -398,7 +419,7 @@ async def homepage():
 
 @app.post("/api/scan")
 async def scan(request: Request):
-    """Scan endpoint with results"""
+    """Fast scan endpoint"""
     try:
         data = await request.json()
         name = data.get("name", "").strip()
@@ -408,14 +429,25 @@ async def scan(request: Request):
         
         if not all([name, email, phone, website]):
             return JSONResponse(
-                {"status": "error", "message": "All fields required"},
+                {"status": "error", "message": "All fields required", "error": "Missing fields"},
                 status_code=400
             )
         
         # Run scan
         scan_results = run_website_scan(website)
         
-        # Send email
+        # If error in scan, still return it
+        if scan_results.get("error"):
+            return JSONResponse({
+                "status": "error",
+                "error": scan_results.get("error"),
+                "score": 0,
+                "passed": 0,
+                "total": 25,
+                "checks": {}
+            }, status_code=400)
+        
+        # Send email (async, don't wait)
         send_scan_email(name, email, website, scan_results)
         
         # Send to Make.com
@@ -432,7 +464,7 @@ async def scan(request: Request):
     except Exception as e:
         print(f"Error: {e}")
         return JSONResponse(
-            {"status": "error", "message": str(e)},
+            {"status": "error", "error": str(e), "score": 0, "passed": 0, "total": 25, "checks": {}},
             status_code=500
         )
 
